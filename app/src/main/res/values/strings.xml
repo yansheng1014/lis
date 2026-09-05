@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">Lis</string>
+    <string name="tile_label">Lis 听书</string>
+
+    <string name="library_title">书架</string>
+    <string name="library_empty">书架空空如也</string>
+    <string name="library_empty_hint">点下方按钮导入 txt / epub</string>
+    <string name="action_import">导入书籍</string>
+    <string name="action_settings">设置</string>
+    <string name="action_rescan">扫描书籍</string>
+
+    <string name="player_title">播放</string>
+    <string name="chapters_title">章节</string>
+    <string name="sentences_title">正在朗读</string>
+    <string name="settings_title">设置</string>
+    <string name="picker_title">选择文件</string>
+
+    <string name="speed">语速</string>
+    <string name="pitch">音调</string>
+    <string name="storage_permission">存储授权</string>
+    <string name="grant_via_shizuku">用 Shizuku 授权</string>
+    <string name="notification_channel_playback">朗读</string>
+</resources>
