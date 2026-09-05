@@ -1,7 +1,6 @@
 package com.lis.wear.tile
 
 import android.content.Context
-import androidx.wear.protolayout.DeviceParametersBuilders
 import androidx.wear.protolayout.DimensionBuilders
 import androidx.wear.protolayout.LayoutElementBuilders
 import androidx.wear.protolayout.ModifiersBuilders.Clickable
@@ -16,6 +15,7 @@ import androidx.wear.protolayout.types.layoutString
 import androidx.wear.tiles.Material3TileService
 import androidx.wear.tiles.RequestBuilders.TileRequest
 import androidx.wear.tiles.TileBuilders.Tile
+import androidx.wear.tiles.TileService
 import com.lis.wear.model.PlayerState
 import com.lis.wear.playback.EngineHolder
 
@@ -26,15 +26,13 @@ import com.lis.wear.playback.EngineHolder
  */
 class LisTileService : Material3TileService() {
 
-    override suspend fun tileResponse(requestParams: TileRequest): Tile {
+    override suspend fun MaterialScope.tileResponse(requestParams: TileRequest): Tile {
         val state = EngineHolder.peek()?.state?.value ?: PlayerState()
         return Tile.Builder()
             .setResourcesVersion(RESOURCES_VERSION)
             .setTileTimeline(
                 androidx.wear.protolayout.TimelineBuilders.Timeline.fromLayoutElement(
-                    materialScope(requestParams.deviceConfiguration) {
-                        tileContent(applicationContext, this, state)
-                    }
+                    tileContent(applicationContext, this, state)
                 )
             )
             .setFreshnessIntervalMillis(30_000)
@@ -116,8 +114,7 @@ class LisTileService : Material3TileService() {
 
         fun requestUpdate(context: Context) {
             runCatching {
-                androidx.wear.tiles.TileUpdateRequester(context)
-                    .requestUpdate(LisTileService::class.java)
+                TileService.getUpdater(context).requestUpdate(LisTileService::class.java)
             }
         }
     }

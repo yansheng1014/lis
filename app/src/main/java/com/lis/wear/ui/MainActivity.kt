@@ -7,17 +7,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.compose.viewModels
 import com.lis.wear.ui.theme.LisTheme
 
 class MainActivity : ComponentActivity() {
+
+    private val viewModel: AppViewModel by viewModels()
 
     private val openDocumentLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             uri?.let { viewModel.importUri(it) }
         }
-
-    private val viewModel: AppViewModel by viewModel()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
