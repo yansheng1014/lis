@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
                     onOpenBook = viewModel::openBook,
                     onImportLocal = viewModel::importLocal,
                     onScan = viewModel::scanFiles,
+                    onRescan = viewModel::refreshFiles,
                     onDeleteBook = viewModel::deleteBook,
                     onPrepareStorage = viewModel::prepareStorage,
                     onDismissToast = viewModel::dismissToast,

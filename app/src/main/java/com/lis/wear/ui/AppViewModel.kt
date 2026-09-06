@@ -1,6 +1,7 @@
 package com.lis.wear.ui
 
 import android.app.Application
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.SystemClock
@@ -13,6 +14,7 @@ import com.lis.wear.data.LisRepository
 import com.lis.wear.fs.BookScanner
 import com.lis.wear.fs.ShizukuShell
 import com.lis.wear.fs.StorageAccess
+import com.lis.wear.model.Book
 import com.lis.wear.model.BookMeta
 import com.lis.wear.model.PlayerState
 import com.lis.wear.model.SleepTimer
@@ -98,6 +100,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             engine.ensureTts()
             engine.resumeLast(autoPlay = false)
         }
+        // 首次打开自动引导授权：自动弹 Shizuku 授权 → 写 AppOp → 需要时自动重启。
+        // 整条链与手动点「扫描书籍」完全一致，用户不用自己找入口。
+        viewModelScope.launch {
+            delay(800) // 等 UI 起来，避免和启动动画抢帧
+            val app = getApplication<Application>()
+            if (!autoPrepareDone(app) && storage.value != StorageStage.READY) {
+                markAutoPrepareDone(app)
+                prepareStorage()
+            }
+        }
+    }
+
+    private fun autoPrepareDone(context: Context): Boolean =
+        context.getSharedPreferences("lis_storage", Context.MODE_PRIVATE)
+            .getBoolean("auto_prepare_done", false)
+
+    private fun markAutoPrepareDone(context: Context) {
+        context.getSharedPreferences("lis_storage", Context.MODE_PRIVATE)
+            .edit().putBoolean("auto_prepare_done", true).apply()
     }
 
     override fun onCleared() {
@@ -130,10 +151,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 唯一的扫描入口：需要就先把权限拿到，再扫盘。全流程带超时，
-     * `busy` 不可能卡死。
+     * 唯一的扫描入口。扫描结果按路径缓存，重复点不再重新遍历，
+     * 秒开秒出；需要换盘内容时用 refreshFiles() 强制重扫。
      */
     fun scanFiles() {
+        if (workJob?.isActive == true) return
+        if (_files.value.isNotEmpty()) return  // 已扫过，直接用缓存结果
+        workJob = viewModelScope.launch {
+            _busy.value = true
+            try {
+                if (ensureStorage()) runScan()
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    /** 强制重新扫描全盘。 */
+    fun refreshFiles() {
         if (workJob?.isActive == true) return
         workJob = viewModelScope.launch {
             _busy.value = true
@@ -224,7 +259,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * 轮询等待 Shizuku 授权结果。回调偶尔丢失（授权页返回时进程被冻结），
      * 轮询兜底后就不会再出现「明明点了允许，还要我再点一次」。
      */
-    private suspend fun awaitShizukuPermission(timeoutMs: Long = 60_000): Boolean {
+    private suspend fun awaitShizukuPermission(timeoutMs: Long = 20_000): Boolean {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline) {
             if (ShizukuShell.hasPermission()) return true
@@ -261,7 +296,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun runScan() {
-        val found = withTimeoutOrNull(20_000) {
+        val found = withTimeoutOrNull(12_000) {
             withContext(Dispatchers.IO) {
                 runCatching { BookScanner.scan() }.getOrElse {
                     Log.w(TAG, "scan failed", it)
@@ -278,13 +313,36 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // endregion
 
+    /**
+     * 导入一本书。direct 文件直接读；shell 找到的文件（direct=false）用
+     * Shizuku `cat` 拷进私有目录再解析，两种路径都有超时保护，不会卡死。
+     */
+    private suspend fun materialiseAndImport(file: BookScanner.LocalFile): Book {
+        val target = File(File(getApplication<Application>().filesDir, "imported"), file.name)
+        if (!file.direct) {
+            val src = "'" + file.path.replace("'", "'\\''") + "'"
+            val dst = "'" + target.absolutePath.replace("'", "'\\''") + "'"
+            val result = withContext(Dispatchers.IO) {
+                ShizukuShell.sh("cat $src > $dst && chmod 666 $dst && echo LIS_OK", timeoutMs = 60_000)
+            }
+            if (result == null || !result.stdout.contains("LIS_OK") || target.length() <= 0) {
+                error("无法读取该文件")
+            }
+        } else {
+            withContext(Dispatchers.IO) {
+                File(file.path).copyTo(target, overwrite = true)
+            }
+        }
+        return withContext(Dispatchers.IO) {
+            BookImporter(getApplication()).importFile(target)
+        }
+    }
+
     fun importLocal(file: BookScanner.LocalFile) {
         if (workJob?.isActive == true) return
         workJob = viewModelScope.launch {
             _busy.value = true
-            val result = withContext(Dispatchers.IO) {
-                runCatching { BookImporter(getApplication()).importFile(File(file.path)) }
-            }
+            val result = runCatching { materialiseAndImport(file) }
             _busy.value = false
             result.onSuccess { book ->
                 repository.saveBook(book)

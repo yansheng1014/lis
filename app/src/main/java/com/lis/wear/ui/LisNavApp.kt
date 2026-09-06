@@ -44,6 +44,7 @@ fun LisNavApp(
     onOpenBook: (BookMeta) -> Unit,
     onImportLocal: (BookScanner.LocalFile) -> Unit,
     onScan: () -> Unit,
+    onRescan: () -> Unit,
     onDeleteBook: (String) -> Unit,
     onPrepareStorage: () -> Unit,
     onDismissToast: () -> Unit,
@@ -137,7 +138,7 @@ fun LisNavApp(
                     busy = busy,
                     storage = storage,
                     onImport = onImportLocal,
-                    onRescan = onScan,
+                    onRescan = onRescan,
                 )
             }
         }

@@ -88,8 +88,8 @@ object ShizukuShell {
                 pump.join(300)
             }
             val code = if (timedOut) -1 else runCatching { proc.waitFor() }.getOrDefault(-1)
-            val text = synchronized(out) { String(out.toByteArray(), Charsets.UTF_8) }
-            Result(code, text, timedOut)
+            val bytes = synchronized(out) { out.toByteArray() }
+            Result(code, String(bytes, Charsets.UTF_8), timedOut)
         }.onFailure {
             runCatching { process?.destroy() }
             Log.w(TAG, "exec ${command.joinToString(" ")} failed", it)
