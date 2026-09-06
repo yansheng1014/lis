@@ -31,16 +31,28 @@ object BookScanner {
     }
 
     /** 必须在 IO 线程调用。 */
-    fun scan(limit: Int = 300): List<LocalFile> {
-        val root = StorageAccess.sharedRoot() ?: return emptyList()
+    fun scan(limit: Int = 500): List<LocalFile> {
         val found = LinkedHashMap<String, LocalFile>()
 
-        for (name in PREFERRED_DIRS) {
-            if (found.size >= limit) break
-            walk(File(root, name), DEPTH, found, limit, skipNoise = false)
+        // 收集所有候选根目录：/sdcard 以及 /storage/emulated/0
+        val roots = buildList {
+            StorageAccess.sharedRoot()?.let { add(it) }
+            add(File("/sdcard"))
+            add(File("/storage/emulated/0"))
+        }.distinctBy { it.absolutePath }.filter { it.exists() }
+
+        // 1. 优先扫描常见书籍目录
+        for (root in roots) {
+            for (name in PREFERRED_DIRS) {
+                if (found.size >= limit) break
+                walk(File(root, name), depth = 4, out = found, limit = limit, skipNoise = false)
+            }
         }
-        if (found.size < limit) {
-            walk(root, 2, found, limit, skipNoise = true)
+
+        // 2. 深度全盘扫：对每个根目录下的子目录全量扫（深度 4），只跳过明确的媒体/系统缓存大目录
+        for (root in roots) {
+            if (found.size >= limit) break
+            walk(root, depth = 4, out = found, limit = limit, skipNoise = true)
         }
 
         return found.values.sortedWith(

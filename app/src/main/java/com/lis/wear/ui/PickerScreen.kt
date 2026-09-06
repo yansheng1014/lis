@@ -109,7 +109,7 @@ fun PickerScreen(
 }
 
 private fun StorageStage.emptyHint(): String = when (this) {
-    StorageStage.READY -> "没找到 txt / epub\n放到 Download 再扫一次"
+    StorageStage.READY -> "未找到 txt / epub 书籍\n请检查文件是否已传入手表"
     StorageStage.NEED_RESTART -> "已授权\n重开 Lis 后即可读取"
     StorageStage.NEED_GRANT -> "点下方按钮授权\n授权后无需再开 Shizuku"
     StorageStage.NEED_SHIZUKU -> "先在手表启动 Shizuku\n只需授权这一次"

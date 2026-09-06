@@ -272,7 +272,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
         _files.value = found
         if (found.isEmpty()) {
-            _toast.value = Toast("没找到 txt / epub\n放到 Download 再扫", success = false)
+            _toast.value = Toast("手表中未找到 txt / epub 书籍", success = false)
         }
     }
 
