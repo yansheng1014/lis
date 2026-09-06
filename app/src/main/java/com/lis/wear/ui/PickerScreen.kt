@@ -25,17 +25,16 @@ import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TitleCard
 import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
-import com.lis.wear.fs.ShizukuFiles
+import com.lis.wear.fs.BookScanner
 
-/** 文件浏览：扫出来的手表本地书籍，点一下导入。 */
+/** 文件浏览：扫到的手表本地书籍，点一下导入。 */
 @Composable
 fun PickerScreen(
-    files: List<ShizukuFiles.RemoteFile>,
+    files: List<BookScanner.LocalFile>,
     busy: Boolean,
-    shizukuReady: Boolean,
-    onImport: (ShizukuFiles.RemoteFile) -> Unit,
+    storage: StorageStage,
+    onImport: (BookScanner.LocalFile) -> Unit,
     onRescan: () -> Unit,
-    onGrantShizuku: () -> Unit,
 ) {
     val listState = rememberTransformingLazyColumnState()
     val spec = rememberTransformationSpec()
@@ -44,11 +43,15 @@ fun PickerScreen(
         scrollState = listState,
         edgeButton = {
             EdgeButton(
-                onClick = if (shizukuReady) onRescan else onGrantShizuku,
+                onClick = onRescan,
                 buttonSize = EdgeButtonSize.Small,
                 enabled = !busy,
             ) {
-                Text(if (shizukuReady) "重新扫描" else "授权 Shizuku")
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                } else {
+                    Text(if (storage == StorageStage.READY) "重新扫描" else "授权并扫描")
+                }
             }
         },
     ) { contentPadding ->
@@ -76,11 +79,7 @@ fun PickerScreen(
 
                 files.isEmpty() -> item {
                     Text(
-                        text = if (shizukuReady) {
-                            "没找到 txt / epub\n放到 Download 或 Documents 再试"
-                        } else {
-                            "需要 Shizuku 才能读取手表存储\n点下方按钮授权"
-                        },
+                        text = storage.emptyHint(),
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -109,8 +108,14 @@ fun PickerScreen(
     }
 }
 
-private fun ShizukuFiles.RemoteFile.humanSize(): String = when {
-    size < 0 -> parent
+private fun StorageStage.emptyHint(): String = when (this) {
+    StorageStage.READY -> "没找到 txt / epub\n放到 Download 再扫一次"
+    StorageStage.NEED_RESTART -> "已授权\n重开 Lis 后即可读取"
+    StorageStage.NEED_GRANT -> "点下方按钮授权\n授权后无需再开 Shizuku"
+    StorageStage.NEED_SHIZUKU -> "先在手表启动 Shizuku\n只需授权这一次"
+}
+
+private fun BookScanner.LocalFile.humanSize(): String = when {
     size < 1024 -> "$size B"
     size < 1024 * 1024 -> "${size / 1024} KB"
     else -> "${"%.1f".format(size / 1024f / 1024f)} MB"

@@ -16,6 +16,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val startInPlayer = intent?.getBooleanExtra(EXTRA_OPEN_PLAYER, false) == true
+        // 由授权后自动重启回来的：直接把扫描接着做完，用户不必再点一次。
+        val scanOnStart = savedInstanceState == null &&
+            intent?.getBooleanExtra(EXTRA_SCAN_FILES, false) == true
 
         setContent {
             LisTheme {
@@ -24,23 +27,22 @@ class MainActivity : ComponentActivity() {
                 val files by viewModel.files.collectAsStateWithLifecycle()
                 val busy by viewModel.busy.collectAsStateWithLifecycle()
                 val toast by viewModel.toast.collectAsStateWithLifecycle()
-                val shizukuReady by viewModel.shizukuReady.collectAsStateWithLifecycle()
-                val shizukuRunning by viewModel.shizukuRunning.collectAsStateWithLifecycle()
+                val storage by viewModel.storage.collectAsStateWithLifecycle()
 
                 LisNavApp(
                     playerState = playerState,
                     library = library,
                     files = files,
                     busy = busy,
-                    shizukuReady = shizukuReady,
-                    shizukuRunning = shizukuRunning,
+                    storage = storage,
                     toast = toast,
                     startInPlayer = startInPlayer,
+                    startWithScan = scanOnStart,
                     onOpenBook = viewModel::openBook,
-                    onImportRemote = viewModel::importRemote,
+                    onImportLocal = viewModel::importLocal,
                     onScan = viewModel::scanFiles,
                     onDeleteBook = viewModel::deleteBook,
-                    onGrantShizuku = viewModel::grantShizuku,
+                    onPrepareStorage = viewModel::prepareStorage,
                     onDismissToast = viewModel::dismissToast,
                     onToggle = viewModel::toggle,
                     onNext = viewModel::nextChapter,
@@ -61,10 +63,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        viewModel.refreshShizukuState()
+        viewModel.refreshStorage()
     }
 
     companion object {
         const val EXTRA_OPEN_PLAYER = "extra_open_player"
+        const val EXTRA_SCAN_FILES = "extra_scan_files"
     }
 }

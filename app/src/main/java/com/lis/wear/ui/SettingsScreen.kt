@@ -7,14 +7,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
+import androidx.wear.compose.material3.CircularProgressIndicator
 import androidx.wear.compose.material3.EdgeButton
 import androidx.wear.compose.material3.EdgeButtonSize
 import androidx.wear.compose.material3.FilledTonalButton
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.ListHeader
+import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.SurfaceTransformation
 import androidx.wear.compose.material3.Text
@@ -23,14 +26,13 @@ import androidx.wear.compose.material3.lazy.transformedHeight
 import com.lis.wear.R
 
 /**
- * 设置：只保留文件访问相关。语速/音调/章节/定时已移入播放页的上滑面板，
- * 避免功能重复。
+ * 设置：只保留存储授权。语速/音调/章节/定时都在播放页上滑面板里。
  */
 @Composable
 fun SettingsScreen(
-    shizukuReady: Boolean,
-    shizukuRunning: Boolean,
-    onGrantShizuku: () -> Unit,
+    storage: StorageStage,
+    busy: Boolean,
+    onPrepareStorage: () -> Unit,
     onOpenPicker: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -58,33 +60,25 @@ fun SettingsScreen(
             }
 
             item {
+                val ready = storage == StorageStage.READY
                 FilledTonalButton(
-                    onClick = onGrantShizuku,
+                    onClick = onPrepareStorage,
+                    enabled = !busy && !ready,
                     icon = {
-                        Icon(
-                            painter = painterResource(
-                                if (shizukuReady) R.drawable.ic_check else R.drawable.ic_lock
-                            ),
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                        )
+                        if (busy) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                        } else {
+                            Icon(
+                                painter = painterResource(
+                                    if (ready) R.drawable.ic_check else R.drawable.ic_lock
+                                ),
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     },
-                    label = {
-                        Text(
-                            when {
-                                shizukuReady -> "Shizuku 已就绪"
-                                shizukuRunning -> "点此授权 Shizuku"
-                                else -> "未检测到 Shizuku"
-                            },
-                            maxLines = 1,
-                        )
-                    },
-                    secondaryLabel = {
-                        Text(
-                            if (shizukuReady) "可直接扫描手表文件" else "先在手表启动 Shizuku",
-                            maxLines = 1,
-                        )
-                    },
+                    label = { Text(storage.title(), maxLines = 1) },
+                    secondaryLabel = { Text(storage.subtitle(), maxLines = 2) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .transformedHeight(this, spec),
@@ -95,6 +89,7 @@ fun SettingsScreen(
             item {
                 FilledTonalButton(
                     onClick = onOpenPicker,
+                    enabled = !busy,
                     icon = {
                         Icon(
                             painter = painterResource(R.drawable.ic_search),
@@ -113,12 +108,26 @@ fun SettingsScreen(
             item {
                 Text(
                     "语速、音调、章节、定时在播放页向上滑设置",
-                    style = androidx.wear.compose.material3.MaterialTheme.typography.labelSmall,
-                    color = androidx.wear.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 )
             }
         }
     }
+}
+
+private fun StorageStage.title(): String = when (this) {
+    StorageStage.READY -> "存储已就绪"
+    StorageStage.NEED_RESTART -> "重启应用生效"
+    StorageStage.NEED_GRANT -> "点此授权存储"
+    StorageStage.NEED_SHIZUKU -> "未检测到 Shizuku"
+}
+
+private fun StorageStage.subtitle(): String = when (this) {
+    StorageStage.READY -> "已不再依赖 Shizuku"
+    StorageStage.NEED_RESTART -> "权限已写入，重开即可"
+    StorageStage.NEED_GRANT -> "授权一次，永久有效"
+    StorageStage.NEED_SHIZUKU -> "先在手表启动 Shizuku"
 }

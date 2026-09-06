@@ -10,7 +10,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-    <!-- Shizuku 客户端权限；文件读取走 Shizuku shell，不需要 MANAGE_EXTERNAL_STORAGE -->
+    <!-- 手表没有「所有文件访问」设置项，也没有文件管理器；这个权限由 Shizuku 以
+         shell 身份写 AppOp 授予，一次授权后永久有效，之后读书不再依赖 Shizuku。 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <!-- Shizuku 客户端权限 -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <queries>
@@ -55,6 +59,16 @@
                 <data android:mimeType="application/epub+zip" />
             </intent-filter>
         </activity>
+
+        <!-- 存储授权后重建进程用的中转页，跑在独立进程里 -->
+        <activity
+            android:name=".RestartActivity"
+            android:exported="false"
+            android:process=":restart"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=".restart"
+            android:theme="@style/LisSplashTheme" />
 
         <!-- 播放服务：暴露 MediaSession，供系统媒体控制条 / 表盘播放指示器驱动 -->
         <service

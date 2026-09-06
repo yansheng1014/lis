@@ -14,7 +14,7 @@ import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import com.lis.wear.R
-import com.lis.wear.fs.ShizukuFiles
+import com.lis.wear.fs.BookScanner
 import com.lis.wear.model.BookMeta
 import com.lis.wear.model.PlayerState
 import com.lis.wear.model.SleepTimer
@@ -35,17 +35,17 @@ object Routes {
 fun LisNavApp(
     playerState: PlayerState,
     library: List<BookMeta>,
-    files: List<ShizukuFiles.RemoteFile>,
+    files: List<BookScanner.LocalFile>,
     busy: Boolean,
-    shizukuReady: Boolean,
-    shizukuRunning: Boolean,
+    storage: StorageStage,
     toast: Toast?,
     startInPlayer: Boolean,
+    startWithScan: Boolean,
     onOpenBook: (BookMeta) -> Unit,
-    onImportRemote: (ShizukuFiles.RemoteFile) -> Unit,
+    onImportLocal: (BookScanner.LocalFile) -> Unit,
     onScan: () -> Unit,
     onDeleteBook: (String) -> Unit,
-    onGrantShizuku: () -> Unit,
+    onPrepareStorage: () -> Unit,
     onDismissToast: () -> Unit,
     onToggle: () -> Unit,
     onNext: () -> Unit,
@@ -60,6 +60,14 @@ fun LisNavApp(
     LaunchedEffect(startInPlayer, playerState.hasBook) {
         if (startInPlayer && playerState.hasBook) {
             navController.navigate(Routes.PLAYER)
+        }
+    }
+
+    // 授权重启后自动续上扫描流程。
+    LaunchedEffect(startWithScan) {
+        if (startWithScan) {
+            onScan()
+            navController.navigate(Routes.PICKER)
         }
     }
 
@@ -112,9 +120,9 @@ fun LisNavApp(
 
             composable(Routes.SETTINGS) {
                 SettingsScreen(
-                    shizukuReady = shizukuReady,
-                    shizukuRunning = shizukuRunning,
-                    onGrantShizuku = onGrantShizuku,
+                    storage = storage,
+                    busy = busy,
+                    onPrepareStorage = onPrepareStorage,
                     onOpenPicker = {
                         onScan()
                         navController.navigate(Routes.PICKER)
@@ -127,10 +135,9 @@ fun LisNavApp(
                 PickerScreen(
                     files = files,
                     busy = busy,
-                    shizukuReady = shizukuReady,
-                    onImport = onImportRemote,
+                    storage = storage,
+                    onImport = onImportLocal,
                     onRescan = onScan,
-                    onGrantShizuku = onGrantShizuku,
                 )
             }
         }
