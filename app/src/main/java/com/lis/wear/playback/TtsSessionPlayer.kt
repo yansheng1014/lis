@@ -1,5 +1,8 @@
 package com.lis.wear.playback
 
+import android.os.Handler
+import android.os.Looper
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackParameters
@@ -12,18 +15,25 @@ import com.lis.wear.model.PlayerState
 
 /**
  * Bridges the TTS engine to Media3 so the watch's system media controls, the
- * Samsung playback indicator and any external media controller can drive Lis.
+ * playback indicator and external media controllers can drive Lis.
  *
- * Modelling choice: one chapter == one playlist item. That makes previous/next
- * on the system controls behave like "previous/next episode", and lets the OS
- * render a sensible title/subtitle. Position inside a chapter is estimated from
- * the sentence cursor, which is enough for a progress bar and seeking.
+ * One chapter == one playlist item, which makes previous/next behave like
+ * "previous/next episode". Position inside a chapter is estimated from the
+ * sentence cursor, which is enough for a progress bar and coarse seeking.
  */
 @UnstableApi
 class TtsSessionPlayer(
     private val engine: TtsBookEngine,
-    private val applicationLooper: android.os.Looper,
-) : SimpleBasePlayer(applicationLooper) {
+    private val looper: Looper,
+) : SimpleBasePlayer(looper) {
+
+    private val handler = Handler(looper)
+
+    // A 900-chapter book would otherwise rebuild ~900 MediaItemData objects on
+    // every sentence change. Cache per book; durations are coarse anyway.
+    private var cachedBookId: String? = null
+    private var cachedCount: Int = 0
+    private var cachedPlaylist: List<MediaItemData> = emptyList()
 
     private val commands: Player.Commands = Player.Commands.Builder()
         .addAll(
@@ -46,6 +56,15 @@ class TtsSessionPlayer(
             Player.COMMAND_SET_SPEED_AND_PITCH,
         )
         .build()
+
+    /** Ask Media3 to re-read [getState]; safe to call from any thread. */
+    fun requestStateRefresh() {
+        if (Looper.myLooper() == looper) {
+            runCatching { invalidateState() }
+        } else {
+            handler.post { runCatching { invalidateState() } }
+        }
+    }
 
     override fun getState(): State {
         val s = engine.state.value
@@ -74,15 +93,6 @@ class TtsSessionPlayer(
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
         if (playWhenReady) engine.play() else engine.pause()
         return Futures.immediateVoidFuture()
-    }
-
-    /** [invalidateState] is protected; the service needs to trigger a refresh. */
-    fun invalidateStatePublic() {
-        if (android.os.Looper.myLooper() == applicationLooper) {
-            invalidateState()
-        } else {
-            android.os.Handler(applicationLooper).post { invalidateState() }
-        }
     }
 
     override fun handlePrepare(): ListenableFuture<*> = Futures.immediateVoidFuture()
@@ -123,7 +133,7 @@ class TtsSessionPlayer(
             Player.COMMAND_SEEK_FORWARD -> engine.nextSentence()
 
             else -> {
-                if (mediaItemIndex != s.chapterIndex && mediaItemIndex != C_INDEX_UNSET) {
+                if (mediaItemIndex != C.INDEX_UNSET && mediaItemIndex != s.chapterIndex) {
                     engine.jumpChapter(mediaItemIndex)
                 }
                 if (positionMs > 0) {
@@ -137,25 +147,20 @@ class TtsSessionPlayer(
     }
 
     private fun buildPlaylist(s: PlayerState): List<MediaItemData> {
-        // The current chapter has real sentence data; the others get an estimate
-        // so the timeline length stays stable without loading everything.
-        return (0 until s.chapterCount).map { index ->
-            val isCurrent = index == s.chapterIndex
-            val title = if (isCurrent && s.chapterTitle.isNotBlank()) {
-                s.chapterTitle
-            } else {
-                "第 ${index + 1} 章"
-            }
-            val durationMs = if (isCurrent) {
-                chapterDurationMs(s)
-            } else {
-                DEFAULT_CHAPTER_MS
-            }
+        if (cachedBookId == s.bookId &&
+            cachedCount == s.chapterCount &&
+            cachedPlaylist.isNotEmpty()
+        ) {
+            return cachedPlaylist
+        }
+        val items = (0 until s.chapterCount).map { index ->
+            val title = s.titleForChapter(index)
             val metadata = MediaMetadata.Builder()
                 .setTitle(title)
                 .setArtist(s.bookTitle)
                 .setAlbumTitle(s.bookTitle)
                 .setDisplayTitle(title)
+                .setSubtitle(s.bookTitle)
                 .setIsBrowsable(false)
                 .setIsPlayable(true)
                 .build()
@@ -167,17 +172,20 @@ class TtsSessionPlayer(
                         .build()
                 )
                 .setMediaMetadata(metadata)
-                .setDurationUs(durationMs * 1000)
+                .setDurationUs(DEFAULT_CHAPTER_MS * 1000)
                 .setIsSeekable(true)
                 .setIsDynamic(false)
                 .build()
         }
+        cachedBookId = s.bookId
+        cachedCount = s.chapterCount
+        cachedPlaylist = items
+        return items
     }
 
-    private fun chapterDurationMs(s: PlayerState): Long {
-        if (s.sentences.isEmpty()) return DEFAULT_CHAPTER_MS
-        return s.sentences.sumOf { sentenceDurationMs(it, s.speed) }
-    }
+    private fun chapterDurationMs(s: PlayerState): Long =
+        if (s.sentences.isEmpty()) DEFAULT_CHAPTER_MS
+        else s.sentences.sumOf { sentenceDurationMs(it, s.speed) }
 
     private fun positionMsFor(s: PlayerState): Long {
         if (s.sentences.isEmpty()) return 0
@@ -198,16 +206,15 @@ class TtsSessionPlayer(
         return s.sentences.lastIndex
     }
 
-    /** ~5 characters per second at rate 1.0; good enough for a progress bar. */
+    /** ~4 characters per second at rate 1.0; good enough for a progress bar. */
     private fun sentenceDurationMs(sentence: String, speed: Float): Long {
         val safeSpeed = if (speed <= 0f) 1f else speed
         return ((sentence.length.coerceAtLeast(1)) * MS_PER_CHAR / safeSpeed).toLong()
     }
 
     companion object {
-        private const val MS_PER_CHAR = 200f
+        private const val MS_PER_CHAR = 240f
         private const val DEFAULT_CHAPTER_MS = 5 * 60 * 1000L
         private const val SENTENCE_STEP_MS = 5_000L
-        private const val C_INDEX_UNSET = -1
     }
 }

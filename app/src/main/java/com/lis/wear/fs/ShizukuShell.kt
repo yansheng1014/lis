@@ -22,8 +22,16 @@ object ShizukuShell {
     fun isRunning(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
 
     fun hasPermission(): Boolean = runCatching {
-        if (Shizuku.isPreV11()) false
+        if (!Shizuku.pingBinder()) false
+        else if (Shizuku.isPreV11()) false
         else Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+    }.getOrDefault(false)
+
+    /** True when the user has explicitly denied and ticked "don't ask again". */
+    fun deniedForever(): Boolean = runCatching {
+        Shizuku.pingBinder() &&
+            Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED &&
+            !Shizuku.shouldShowRequestPermissionRationale()
     }.getOrDefault(false)
 
     fun requestPermission() {
@@ -35,9 +43,14 @@ object ShizukuShell {
         val ok: Boolean get() = exitCode == 0
     }
 
-    /** Execute one command; returns null when Shizuku is unusable. */
-    fun exec(vararg command: String): Result? {
-        if (!isRunning() || !hasPermission()) return null
+    /**
+     * Execute one command; returns null when Shizuku is unusable.
+     *
+     * @param timeoutMs hard cap so a runaway `find` can never hang the caller
+     */
+    fun exec(vararg command: String, timeoutMs: Long = 20_000): Result? {
+        if (!hasPermission()) return null
+        var process: Process? = null
         return runCatching {
             val method = Shizuku::class.java.getDeclaredMethod(
                 "newProcess",
@@ -46,26 +59,39 @@ object ShizukuShell {
                 String::class.java,
             ).apply { isAccessible = true }
 
-            val process = method.invoke(null, arrayOf(*command), null, null) as Process
-            val bytes = process.inputStream.readAllBytesCompat()
-            runCatching { process.errorStream.readAllBytesCompat() }
-            val code = process.waitFor()
+            process = method.invoke(null, arrayOf(*command), null, null) as Process
+            val proc = process!!
+
+            // Drain stdout on this thread while a watchdog enforces the timeout.
+            val deadline = System.currentTimeMillis() + timeoutMs
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(32 * 1024)
+            val input = proc.inputStream
+            while (true) {
+                if (System.currentTimeMillis() > deadline) {
+                    runCatching { proc.destroy() }
+                    break
+                }
+                val n = input.read(buf)
+                if (n < 0) break
+                out.write(buf, 0, n)
+            }
+            runCatching { proc.errorStream.drain() }
+            val code = runCatching { proc.waitFor() }.getOrDefault(-1)
+            val bytes = out.toByteArray()
             Result(code, String(bytes, Charsets.UTF_8), bytes)
-        }.onFailure { Log.w(TAG, "exec ${command.joinToString(" ")} failed", it) }
-            .getOrNull()
+        }.onFailure {
+            runCatching { process?.destroy() }
+            Log.w(TAG, "exec ${command.joinToString(" ")} failed", it)
+        }.getOrNull()
     }
 
     /** Convenience: run a `sh -c` line. */
-    fun sh(line: String): Result? = exec("sh", "-c", line)
+    fun sh(line: String, timeoutMs: Long = 20_000): Result? =
+        exec("sh", "-c", line, timeoutMs = timeoutMs)
 
-    private fun InputStream.readAllBytesCompat(): ByteArray {
-        val out = ByteArrayOutputStream()
-        val buf = ByteArray(32 * 1024)
-        while (true) {
-            val n = read(buf)
-            if (n < 0) break
-            out.write(buf, 0, n)
-        }
-        return out.toByteArray()
+    private fun InputStream.drain() {
+        val buf = ByteArray(8 * 1024)
+        while (read(buf) >= 0) { /* discard */ }
     }
 }

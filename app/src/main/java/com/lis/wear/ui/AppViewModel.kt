@@ -2,8 +2,9 @@ package com.lis.wear.ui
 
 import android.app.Application
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lis.wear.book.BookImporter
@@ -12,11 +13,11 @@ import com.lis.wear.fs.ShizukuFiles
 import com.lis.wear.fs.ShizukuShell
 import com.lis.wear.model.BookMeta
 import com.lis.wear.model.PlayerState
+import com.lis.wear.model.SleepTimer
 import com.lis.wear.playback.EngineHolder
 import com.lis.wear.playback.LisPlaybackService
 import com.lis.wear.playback.TtsBookEngine
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +25,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 
-/** 单条轻提示，UI 用 ConfirmationDialog 展示，2 秒自动关。 */
+/** Toast-like message; rendered by a Wear ConfirmationDialog. */
 data class Toast(val text: String, val success: Boolean = true)
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -38,27 +39,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _files = MutableStateFlow<List<ShizukuFiles.RemoteFile>>(emptyList())
     val files: StateFlow<List<ShizukuFiles.RemoteFile>> = _files.asStateFlow()
 
-    private val _scanning = MutableStateFlow(false)
-    val scanning: StateFlow<Boolean> = _scanning.asStateFlow()
+    private val _busy = MutableStateFlow(false)
+    val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
     private val _toast = MutableStateFlow<Toast?>(null)
     val toast: StateFlow<Toast?> = _toast.asStateFlow()
 
-    private val _storageReady = MutableStateFlow(ShizukuFiles.available())
-    val storageReady: StateFlow<Boolean> = _storageReady.asStateFlow()
+    private val _shizukuReady = MutableStateFlow(ShizukuShell.hasPermission())
+    val shizukuReady: StateFlow<Boolean> = _shizukuReady.asStateFlow()
 
     private val _shizukuRunning = MutableStateFlow(ShizukuShell.isRunning())
     val shizukuRunning: StateFlow<Boolean> = _shizukuRunning.asStateFlow()
 
-    /** Shizuku 授权对话框的回调：授权成功后立刻刷新状态并自动扫描。 */
+    /** Set when a scan should immediately follow a successful grant. */
+    private var scanAfterGrant = false
+
     private val permissionListener =
         Shizuku.OnRequestPermissionResultListener { _, grantResult ->
-            val granted = grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val granted = grantResult == PackageManager.PERMISSION_GRANTED
             refreshShizukuState()
             if (granted) {
-                _toast.value = Toast("授权成功")
-                scanFiles()
+                _toast.value = Toast("Shizuku 已授权")
+                if (scanAfterGrant) {
+                    scanAfterGrant = false
+                    scanFiles()
+                }
             } else {
+                scanAfterGrant = false
                 _toast.value = Toast("已拒绝授权", success = false)
             }
         }
@@ -67,10 +74,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         refreshShizukuState()
     }
 
+    private val binderDeadListener = Shizuku.OnBinderDeadListener {
+        refreshShizukuState()
+    }
+
     init {
         runCatching {
             Shizuku.addRequestPermissionResultListener(permissionListener)
             Shizuku.addBinderReceivedListenerSticky(binderReceivedListener)
+            Shizuku.addBinderDeadListener(binderDeadListener)
         }
         viewModelScope.launch {
             engine.ensureTts()
@@ -82,6 +94,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         runCatching {
             Shizuku.removeRequestPermissionResultListener(permissionListener)
             Shizuku.removeBinderReceivedListener(binderReceivedListener)
+            Shizuku.removeBinderDeadListener(binderDeadListener)
         }
         super.onCleared()
     }
@@ -92,55 +105,79 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshShizukuState() {
         _shizukuRunning.value = ShizukuShell.isRunning()
-        _storageReady.value = ShizukuFiles.available()
+        _shizukuReady.value = ShizukuShell.hasPermission()
     }
 
-    /** 请求 Shizuku 权限；已就绪时直接扫描。 */
+    /**
+     * Single entry point used by every "scan" button. It handles the whole flow:
+     * grant Shizuku if needed, then scan, and always reports the outcome.
+     */
+    fun scanFiles() {
+        if (_busy.value) return
+        refreshShizukuState()
+
+        if (!_shizukuReady.value) {
+            if (!_shizukuRunning.value) {
+                // Still try a permission-free walk — some watches allow legacy reads.
+                viewModelScope.launch { runScan(afterGrantHint = true) }
+                return
+            }
+            scanAfterGrant = true
+            ShizukuShell.requestPermission()
+            return
+        }
+        viewModelScope.launch { runScan(afterGrantHint = false) }
+    }
+
+    private suspend fun runScan(afterGrantHint: Boolean) {
+        _busy.value = true
+        val found = withContext(Dispatchers.IO) {
+            runCatching { ShizukuFiles.scan() }.getOrElse {
+                Log.w(TAG, "scan failed", it)
+                emptyList()
+            }
+        }
+        _busy.value = false
+        _files.value = found
+        if (found.isEmpty()) {
+            _toast.value = Toast(
+                if (afterGrantHint) "请在手表启动 Shizuku 后重试" else "没找到 txt / epub",
+                success = false,
+            )
+        }
+    }
+
     fun grantShizuku() {
         refreshShizukuState()
-        if (!_shizukuRunning.value) {
-            _toast.value = Toast("请先在手表上启动 Shizuku", success = false)
-            return
-        }
-        if (_storageReady.value) {
-            scanFiles()
-            return
-        }
-        ShizukuShell.requestPermission()
-    }
-
-    fun scanFiles() {
-        if (_scanning.value) return
-        viewModelScope.launch {
-            refreshShizukuState()
-            if (!_storageReady.value) {
-                grantShizuku()
-                return@launch
+        when {
+            _shizukuReady.value -> scanFiles()
+            !_shizukuRunning.value ->
+                _toast.value = Toast("请先在手表上启动 Shizuku", success = false)
+            else -> {
+                scanAfterGrant = true
+                ShizukuShell.requestPermission()
             }
-            _scanning.value = true
-            val found = withContext(Dispatchers.IO) { ShizukuFiles.list() }
-            _scanning.value = false
-            _files.value = found
-            if (found.isEmpty()) _toast.value = Toast("没找到书籍文件", success = false)
         }
     }
 
     fun importRemote(file: ShizukuFiles.RemoteFile) {
+        if (_busy.value) return
         viewModelScope.launch {
-            _scanning.value = true
+            _busy.value = true
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val local = ShizukuFiles.copyIntoApp(getApplication(), file)
-                        ?: error("读取失败")
+                    val local = ShizukuFiles.materialise(getApplication(), file)
+                        ?: error("无法读取该文件")
                     BookImporter(getApplication()).importFile(local)
                 }
             }
-            _scanning.value = false
+            _busy.value = false
             result.onSuccess { book ->
                 repository.saveBook(book)
                 _files.value = _files.value.filterNot { it.path == file.path }
                 _toast.value = Toast("已导入 ${book.title}")
             }.onFailure {
+                Log.w(TAG, "import failed", it)
                 _toast.value = Toast(it.message ?: "导入失败", success = false)
             }
         }
@@ -148,9 +185,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun importUri(uri: Uri) {
         viewModelScope.launch {
+            _busy.value = true
             val result = withContext(Dispatchers.IO) {
                 runCatching { BookImporter(getApplication()).importUri(uri) }
             }
+            _busy.value = false
             result.onSuccess {
                 repository.saveBook(it)
                 _toast.value = Toast("已导入 ${it.title}")
@@ -160,10 +199,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun openBook(meta: BookMeta, autoPlay: Boolean = true) {
+    fun openBook(meta: BookMeta) {
         viewModelScope.launch {
-            engine.openBook(meta.id, autoPlay)
-            startService()
+            LisPlaybackService.ensureRunning(getApplication())
+            engine.openBook(meta.id, autoPlay = true)
         }
     }
 
@@ -176,17 +215,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggle() {
+        LisPlaybackService.ensureRunning(getApplication())
         engine.togglePlayPause()
-        startService()
     }
 
-    fun nextChapter() = engine.nextChapter()
+    fun nextChapter() {
+        engine.nextChapter()
+    }
 
-    fun previousChapter() = engine.previousChapter()
+    fun previousChapter() {
+        engine.previousChapter()
+    }
 
     fun setSpeed(v: Float) = engine.setSpeed(v)
 
     fun setPitch(v: Float) = engine.setPitch(v)
+
+    fun setSleepTimer(timer: SleepTimer) {
+        engine.setSleepTimer(timer)
+        _toast.value = Toast(
+            if (timer == SleepTimer.OFF) "已关闭定时" else "定时：${timer.label}"
+        )
+    }
 
     fun jumpChapter(index: Int) {
         engine.jumpChapter(index)
@@ -194,12 +244,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun seekToSentence(index: Int) = engine.seekToSentence(index)
 
-    private fun startService() {
-        val app = getApplication<Application>()
-        val intent = Intent(app, LisPlaybackService::class.java)
-        runCatching {
-            if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(intent)
-            else app.startService(intent)
-        }
+    companion object {
+        private const val TAG = "LisVm"
     }
 }

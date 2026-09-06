@@ -4,7 +4,6 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -13,11 +12,6 @@ import com.lis.wear.ui.theme.LisTheme
 class MainActivity : ComponentActivity() {
 
     private val viewModel: AppViewModel by viewModels()
-
-    private val openDocumentLauncher =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            uri?.let { viewModel.importUri(it) }
-        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,38 +22,33 @@ class MainActivity : ComponentActivity() {
                 val playerState by viewModel.playerState.collectAsStateWithLifecycle()
                 val library by viewModel.library.collectAsStateWithLifecycle()
                 val files by viewModel.files.collectAsStateWithLifecycle()
-                val scanning by viewModel.scanning.collectAsStateWithLifecycle()
+                val busy by viewModel.busy.collectAsStateWithLifecycle()
                 val toast by viewModel.toast.collectAsStateWithLifecycle()
-                val storageReady by viewModel.storageReady.collectAsStateWithLifecycle()
+                val shizukuReady by viewModel.shizukuReady.collectAsStateWithLifecycle()
                 val shizukuRunning by viewModel.shizukuRunning.collectAsStateWithLifecycle()
 
                 LisNavApp(
                     playerState = playerState,
                     library = library,
                     files = files,
-                    scanning = scanning,
-                    storageReady = storageReady,
+                    busy = busy,
+                    shizukuReady = shizukuReady,
                     shizukuRunning = shizukuRunning,
                     toast = toast,
                     startInPlayer = startInPlayer,
-                    onOpenBook = { viewModel.openBook(it) },
-                    onImportUri = {
-                        openDocumentLauncher.launch(
-                            arrayOf("text/*", "application/epub+zip", "*/*")
-                        )
-                    },
+                    onOpenBook = viewModel::openBook,
                     onImportRemote = viewModel::importRemote,
                     onScan = viewModel::scanFiles,
                     onDeleteBook = viewModel::deleteBook,
                     onGrantShizuku = viewModel::grantShizuku,
                     onDismissToast = viewModel::dismissToast,
                     onToggle = viewModel::toggle,
-                    onNext = { viewModel.nextChapter() },
-                    onPrevious = { viewModel.previousChapter() },
+                    onNext = viewModel::nextChapter,
+                    onPrevious = viewModel::previousChapter,
                     onSpeed = viewModel::setSpeed,
                     onPitch = viewModel::setPitch,
+                    onSleepTimer = viewModel::setSleepTimer,
                     onJumpChapter = viewModel::jumpChapter,
-                    onSeekSentence = viewModel::seekToSentence,
                 )
             }
         }

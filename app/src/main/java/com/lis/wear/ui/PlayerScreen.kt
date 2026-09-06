@@ -25,14 +25,15 @@ import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.IconButton
 import androidx.wear.compose.material3.IconButtonDefaults
 import androidx.wear.compose.material3.MaterialTheme
-import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import com.lis.wear.R
 import com.lis.wear.model.PlayerState
 
 /**
- * 播放页：中央大号播放/暂停，两侧上一章/下一章，外圈用章节进度环。
- * 上下滑动或点击标题区域进入句子/章节列表。
+ * 播放控制盘（横向分页第 1 页）。
+ *
+ * 布局自上而下：书名 → 章节·序号 → 控制组 → 状态提示。
+ * 正文放在左滑的第 2 页，所以这里给播放按钮留足空间。
  */
 @Composable
 fun PlayerScreen(
@@ -40,113 +41,117 @@ fun PlayerScreen(
     onToggle: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    onOpenChapters: () -> Unit,
-    onOpenSentences: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onBack: () -> Unit,
 ) {
-    val progress = if (state.sentences.isEmpty()) {
-        0f
-    } else {
-        (state.sentenceIndex + 1).toFloat() / state.sentences.size
-    }
-    val animatedProgress by animateFloatAsState(targetValue = progress, label = "progress")
+    val animatedProgress by animateFloatAsState(
+        targetValue = state.chapterProgress,
+        label = "chapterProgress",
+    )
 
-    ScreenScaffold {
-        Box(modifier = Modifier.fillMaxSize()) {
-            // 外圈：本章朗读进度
-            CircularProgressIndicator(
-                progress = { animatedProgress },
-                modifier = Modifier.fillMaxSize().padding(2.dp),
-                strokeWidth = 4.dp,
+    Box(modifier = Modifier.fillMaxSize()) {
+        CircularProgressIndicator(
+            progress = { animatedProgress },
+            modifier = Modifier.fillMaxSize().padding(3.dp),
+            strokeWidth = 4.dp,
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 32.dp, vertical = 30.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = state.bookTitle.ifBlank { "未选择书籍" },
+                style = MaterialTheme.typography.titleSmall,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
             )
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 28.dp, vertical = 26.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    text = state.bookTitle.ifBlank { "未选择书籍" },
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+            Text(
+                text = if (state.hasBook) {
+                    "${state.titleForChapter(state.chapterIndex)} · " +
+                        "${state.chapterIndex + 1}/${state.chapterCount}"
+                } else {
+                    "去书架选一本书"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
-                Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(10.dp))
 
-                Text(
-                    text = state.currentSentence.ifBlank {
-                        state.chapterTitle.ifBlank { "点按播放开始朗读" }
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                Spacer(Modifier.height(6.dp))
-
-                ButtonGroup(modifier = Modifier.fillMaxWidth()) {
-                    IconButton(
-                        onClick = onPrevious,
-                        modifier = Modifier
-                            .weight(1f)
-                            .size(IconButtonDefaults.SmallButtonSize),
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_skip_previous),
-                            contentDescription = "上一章",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-
-                    FilledIconButton(
-                        onClick = onToggle,
-                        modifier = Modifier
-                            .weight(1.6f)
-                            .size(IconButtonDefaults.LargeButtonSize),
-                    ) {
-                        Icon(
-                            painter = painterResource(
-                                if (state.isPlaying) R.drawable.ic_pause_filled
-                                else R.drawable.ic_play_arrow
-                            ),
-                            contentDescription = if (state.isPlaying) "暂停" else "播放",
-                            modifier = Modifier.size(IconButtonDefaults.iconSizeFor(IconButtonDefaults.LargeButtonSize)),
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onNext,
-                        modifier = Modifier
-                            .weight(1f)
-                            .size(IconButtonDefaults.SmallButtonSize),
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_skip_next),
-                            contentDescription = "下一章",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
+            ButtonGroup(modifier = Modifier.fillMaxWidth()) {
+                IconButton(
+                    onClick = onPrevious,
+                    enabled = state.hasBook,
+                    modifier = Modifier
+                        .weight(1f)
+                        .size(IconButtonDefaults.SmallButtonSize),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_skip_previous),
+                        contentDescription = "上一章",
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
 
-                Spacer(Modifier.height(4.dp))
+                FilledIconButton(
+                    onClick = onToggle,
+                    enabled = state.hasBook,
+                    modifier = Modifier
+                        .weight(1.7f)
+                        .size(IconButtonDefaults.LargeButtonSize),
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            if (state.isPlaying) R.drawable.ic_pause_filled
+                            else R.drawable.ic_play_arrow
+                        ),
+                        contentDescription = if (state.isPlaying) "暂停" else "播放",
+                        modifier = Modifier.size(
+                            IconButtonDefaults.iconSizeFor(IconButtonDefaults.LargeButtonSize)
+                        ),
+                    )
+                }
 
-                Text(
-                    text = "${state.chapterIndex + 1}/${state.chapterCount} 章 · " +
-                        "${state.sentenceIndex + 1}/${state.sentences.size.coerceAtLeast(1)} 句",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
+                IconButton(
+                    onClick = onNext,
+                    enabled = state.hasBook,
+                    modifier = Modifier
+                        .weight(1f)
+                        .size(IconButtonDefaults.SmallButtonSize),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_skip_next),
+                        contentDescription = "下一章",
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                text = when {
+                    state.isPreparing -> "准备中…"
+                    !state.hasBook -> ""
+                    else ->
+                        "${state.sentenceIndex + 1}/${state.sentenceTotal.coerceAtLeast(1)} 句 · 上滑设置"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

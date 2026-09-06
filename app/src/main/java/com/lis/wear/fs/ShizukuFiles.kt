@@ -1,108 +1,152 @@
 package com.lis.wear.fs
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
+import com.lis.wear.book.BookImporter
 import java.io.File
 
 /**
- * Reads books off the watch's shared storage **without any Android permission**
- * by going through the Shizuku shell.
+ * Finds book files on the watch.
  *
- * Why not MANAGE_EXTERNAL_STORAGE: granting it via appops only takes effect after
- * the app process restarts, which makes for a terrible watch UX ("授权了但还是读不到").
- * Shizuku's shell already runs with adb-level rights, so we simply `find` and `cat`
- * through it and land the bytes in our own sandbox — instant, no restart, no
- * permission dialog.
+ * Two paths, tried in order:
+ *  1. Plain `java.io.File` walk — works for anything the app can already read
+ *     (its own dirs, and /sdcard on watches that still allow legacy access).
+ *  2. Shizuku shell (`find` / `cat`) — needed on API 33+ where scoped storage
+ *     blocks /sdcard. Nothing is installed or restarted, so it takes effect
+ *     immediately after the user approves Shizuku.
  */
 object ShizukuFiles {
 
-    private const val TAG = "LisShizukuFiles"
+    private const val TAG = "LisFiles"
 
-    /** Directories worth scanning, in priority order. */
     private val SCAN_ROOTS = listOf(
         "/sdcard/Download",
         "/sdcard/Documents",
         "/sdcard/Books",
         "/sdcard/books",
         "/sdcard/Bluetooth",
+        "/storage/emulated/0/Download",
+        "/storage/emulated/0/Documents",
         "/sdcard",
     )
 
     private val EXTENSIONS = listOf("txt", "epub", "text", "md")
 
-    data class RemoteFile(val path: String, val size: Long) {
+    data class RemoteFile(
+        val path: String,
+        val size: Long,
+        /** true when the file is readable directly, no shell needed */
+        val direct: Boolean,
+    ) {
         val name: String get() = path.substringAfterLast('/')
         val parent: String get() = path.substringBeforeLast('/', "/")
     }
 
-    fun available(): Boolean = ShizukuShell.isRunning() && ShizukuShell.hasPermission()
+    fun shizukuReady(): Boolean = ShizukuShell.hasPermission()
 
     /**
-     * List candidate book files. Uses `find` with a depth limit so scanning a
-     * large /sdcard stays fast on watch hardware.
+     * Scan for books. Always tries a direct filesystem walk first so the app is
+     * useful even without Shizuku, then augments with a shell scan when allowed.
      */
-    fun list(limit: Int = 300): List<RemoteFile> {
-        if (!available()) return emptyList()
-        val namePattern = EXTENSIONS.joinToString(" -o ") { "-iname '*.$it'" }
-        val out = LinkedHashMap<String, RemoteFile>()
+    fun scan(limit: Int = 200): List<RemoteFile> {
+        val found = LinkedHashMap<String, RemoteFile>()
 
-        for (root in SCAN_ROOTS) {
-            if (out.size >= limit) break
-            val depth = if (root == "/sdcard") 2 else 4
-            // -printf isn't available on Android's find; use stat for the size.
-            val cmd = "find '$root' -maxdepth $depth -type f \\( $namePattern \\) 2>/dev/null | head -n $limit"
-            val result = ShizukuShell.sh(cmd) ?: continue
-            if (!result.ok && result.stdout.isBlank()) continue
-            for (line in result.stdout.lineSequence()) {
-                val path = line.trim()
-                if (path.isEmpty() || out.containsKey(path)) continue
-                out[path] = RemoteFile(path, size = -1L)
-                if (out.size >= limit) break
-            }
+        // --- 1. direct walk -------------------------------------------------
+        for (root in directRoots()) {
+            if (found.size >= limit) break
+            walkDirect(root, depth = 3, out = found, limit = limit)
         }
 
-        // Fill in sizes in one batch call so we can show them in the picker.
-        if (out.isNotEmpty()) {
-            val paths = out.keys.joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }
-            ShizukuShell.sh("stat -c '%s %n' $paths 2>/dev/null")?.let { stat ->
-                for (line in stat.stdout.lineSequence()) {
-                    val trimmed = line.trim()
-                    val space = trimmed.indexOf(' ')
-                    if (space <= 0) continue
-                    val size = trimmed.substring(0, space).toLongOrNull() ?: continue
-                    val path = trimmed.substring(space + 1)
-                    out[path]?.let { out[path] = it.copy(size = size) }
+        // --- 2. shell walk --------------------------------------------------
+        if (found.size < limit && shizukuReady()) {
+            val namePattern = EXTENSIONS.joinToString(" -o ") { "-iname '*.$it'" }
+            for (root in SCAN_ROOTS) {
+                if (found.size >= limit) break
+                val depth = if (root == "/sdcard" || root.endsWith("emulated/0")) 2 else 4
+                val cmd =
+                    "find '$root' -maxdepth $depth -type f \\( $namePattern \\) 2>/dev/null | head -n $limit"
+                val result = ShizukuShell.sh(cmd, timeoutMs = 12_000) ?: continue
+                for (line in result.stdout.lineSequence()) {
+                    val path = line.trim()
+                    if (path.isEmpty() || found.containsKey(path)) continue
+                    found[path] = RemoteFile(path, size = -1L, direct = false)
+                    if (found.size >= limit) break
                 }
             }
+            fillSizes(found)
         }
 
-        return out.values.toList()
+        return found.values.sortedBy { it.name }
+    }
+
+    /** Roots we can read without any special permission. */
+    private fun directRoots(): List<File> = buildList {
+        runCatching { Environment.getExternalStorageDirectory() }.getOrNull()
+            ?.let { root ->
+                add(File(root, "Download"))
+                add(File(root, "Documents"))
+                add(File(root, "Books"))
+                add(root)
+            }
+    }.filter { it.exists() && it.canRead() }
+        .distinctBy { it.absolutePath }
+
+    private fun walkDirect(dir: File, depth: Int, out: MutableMap<String, RemoteFile>, limit: Int) {
+        if (depth < 0 || out.size >= limit) return
+        val entries = runCatching { dir.listFiles() }.getOrNull() ?: return
+        for (entry in entries) {
+            if (out.size >= limit) return
+            if (entry.isDirectory) {
+                walkDirect(entry, depth - 1, out, limit)
+            } else if (BookImporter.isSupported(entry.name) && entry.canRead()) {
+                out[entry.absolutePath] =
+                    RemoteFile(entry.absolutePath, entry.length(), direct = true)
+            }
+        }
+    }
+
+    private fun fillSizes(files: MutableMap<String, RemoteFile>) {
+        val unknown = files.values.filter { it.size < 0 }
+        if (unknown.isEmpty()) return
+        val quoted = unknown.joinToString(" ") { "'" + it.path.replace("'", "'\\''") + "'" }
+        val stat = ShizukuShell.sh("stat -c '%s %n' $quoted 2>/dev/null", timeoutMs = 8_000)
+            ?: return
+        for (line in stat.stdout.lineSequence()) {
+            val trimmed = line.trim()
+            val space = trimmed.indexOf(' ')
+            if (space <= 0) continue
+            val size = trimmed.substring(0, space).toLongOrNull() ?: continue
+            val path = trimmed.substring(space + 1)
+            files[path]?.let { files[path] = it.copy(size = size) }
+        }
     }
 
     /**
-     * Copy a shared-storage file into app storage using the shell, so the rest of
-     * the app can treat it as a normal local file.
-     *
-     * Implementation detail: we ask the shell to `cat` the file into a path inside
-     * our own files dir. The shell runs as shell/root so it can read the source;
-     * our app dir is world-writable enough for that uid on Wear OS. If that fails
-     * we fall back to streaming stdout.
+     * Make the file available as a local `File`. Direct-readable files are used
+     * as-is; shell-only files are copied into app storage.
      */
-    fun copyIntoApp(context: Context, remote: RemoteFile): File? {
-        if (!available()) return null
+    fun materialise(context: Context, remote: RemoteFile): File? {
+        if (remote.direct) {
+            val f = File(remote.path)
+            if (f.canRead()) return f
+        }
+        if (!shizukuReady()) return null
+
         val target = File(cacheDir(context), remote.name)
         val quotedSrc = "'" + remote.path.replace("'", "'\\''") + "'"
         val quotedDst = "'" + target.absolutePath.replace("'", "'\\''") + "'"
 
-        // Preferred: let the shell write directly, then relax the mode so we can read it.
-        val direct = ShizukuShell.sh("cat $quotedSrc > $quotedDst && chmod 666 $quotedDst && echo OK")
-        if (direct != null && direct.stdout.contains("OK") && target.length() > 0) {
+        val direct = ShizukuShell.sh(
+            "cat $quotedSrc > $quotedDst && chmod 666 $quotedDst && echo LIS_OK",
+            timeoutMs = 60_000,
+        )
+        if (direct != null && direct.stdout.contains("LIS_OK") && target.length() > 0) {
             return target
         }
 
-        // Fallback: stream the bytes back through stdout.
         return runCatching {
-            val result = ShizukuShell.exec("cat", remote.path) ?: return null
+            val result = ShizukuShell.exec("cat", remote.path, timeoutMs = 60_000) ?: return null
             if (result.stdoutBytes.isEmpty()) return null
             target.writeBytes(result.stdoutBytes)
             target.takeIf { it.length() > 0 }

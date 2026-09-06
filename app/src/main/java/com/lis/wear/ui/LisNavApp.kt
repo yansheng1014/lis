@@ -17,32 +17,31 @@ import com.lis.wear.R
 import com.lis.wear.fs.ShizukuFiles
 import com.lis.wear.model.BookMeta
 import com.lis.wear.model.PlayerState
+import com.lis.wear.model.SleepTimer
 
 object Routes {
     const val LIBRARY = "library"
     const val PLAYER = "player"
     const val CHAPTERS = "chapters"
-    const val SENTENCES = "sentences"
     const val SETTINGS = "settings"
     const val PICKER = "picker"
 }
 
 /**
- * 应用外壳：AppScaffold 提供全局 TimeText（曲面时间），
- * SwipeDismissableNavHost 提供 Wear 原生右滑返回动画。
+ * 应用外壳：AppScaffold 提供全局曲面 TimeText，SwipeDismissableNavHost 提供
+ * Wear 原生右滑返回。播放页本身是嵌套的分页结构（见 [PlayerPager]）。
  */
 @Composable
 fun LisNavApp(
     playerState: PlayerState,
     library: List<BookMeta>,
     files: List<ShizukuFiles.RemoteFile>,
-    scanning: Boolean,
-    storageReady: Boolean,
+    busy: Boolean,
+    shizukuReady: Boolean,
     shizukuRunning: Boolean,
     toast: Toast?,
     startInPlayer: Boolean,
     onOpenBook: (BookMeta) -> Unit,
-    onImportUri: () -> Unit,
     onImportRemote: (ShizukuFiles.RemoteFile) -> Unit,
     onScan: () -> Unit,
     onDeleteBook: (String) -> Unit,
@@ -53,8 +52,8 @@ fun LisNavApp(
     onPrevious: () -> Unit,
     onSpeed: (Float) -> Unit,
     onPitch: (Float) -> Unit,
+    onSleepTimer: (SleepTimer) -> Unit,
     onJumpChapter: (Int) -> Unit,
-    onSeekSentence: (Int) -> Unit,
 ) {
     val navController = rememberSwipeDismissableNavController()
 
@@ -73,11 +72,11 @@ fun LisNavApp(
                 LibraryScreen(
                     library = library,
                     playerState = playerState,
+                    busy = busy,
                     onOpen = {
                         onOpenBook(it)
                         navController.navigate(Routes.PLAYER)
                     },
-                    onImportUri = onImportUri,
                     onScan = {
                         onScan()
                         navController.navigate(Routes.PICKER)
@@ -89,15 +88,15 @@ fun LisNavApp(
             }
 
             composable(Routes.PLAYER) {
-                PlayerScreen(
+                PlayerPager(
                     state = playerState,
                     onToggle = onToggle,
                     onNext = onNext,
                     onPrevious = onPrevious,
+                    onSpeed = onSpeed,
+                    onPitch = onPitch,
+                    onSleepTimer = onSleepTimer,
                     onOpenChapters = { navController.navigate(Routes.CHAPTERS) },
-                    onOpenSentences = { navController.navigate(Routes.SENTENCES) },
-                    onOpenSettings = { navController.navigate(Routes.SETTINGS) },
-                    onBack = { navController.popBackStack() },
                 )
             }
 
@@ -111,22 +110,15 @@ fun LisNavApp(
                 )
             }
 
-            composable(Routes.SENTENCES) {
-                SentencesScreen(
-                    state = playerState,
-                    onSelect = onSeekSentence,
-                )
-            }
-
             composable(Routes.SETTINGS) {
                 SettingsScreen(
-                    state = playerState,
-                    storageReady = storageReady,
+                    shizukuReady = shizukuReady,
                     shizukuRunning = shizukuRunning,
-                    onSpeed = onSpeed,
-                    onPitch = onPitch,
-                    onOpenPicker = { navController.navigate(Routes.PICKER) },
                     onGrantShizuku = onGrantShizuku,
+                    onOpenPicker = {
+                        onScan()
+                        navController.navigate(Routes.PICKER)
+                    },
                     onBack = { navController.popBackStack() },
                 )
             }
@@ -134,18 +126,16 @@ fun LisNavApp(
             composable(Routes.PICKER) {
                 PickerScreen(
                     files = files,
-                    scanning = scanning,
-                    storageReady = storageReady,
+                    busy = busy,
+                    shizukuReady = shizukuReady,
                     onImport = onImportRemote,
                     onRescan = onScan,
                     onGrantShizuku = onGrantShizuku,
-                    onBack = { navController.popBackStack() },
                 )
             }
         }
     }
 
-    // 全屏轻提示：Wear 原生 ConfirmationDialog，自带图标动画和自动消失
     ConfirmationDialog(
         visible = toast != null,
         onDismissRequest = onDismissToast,
@@ -156,7 +146,7 @@ fun LisNavApp(
                     if (toast?.success != false) R.drawable.ic_check else R.drawable.ic_lock
                 ),
                 contentDescription = null,
-                modifier = Modifier.size(ConfirmationDialogDefaults.SmallIconSize),
+                modifier = Modifier.size(ConfirmationDialogDefaults.IconSize),
             )
         },
     )

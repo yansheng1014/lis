@@ -14,30 +14,23 @@ import androidx.wear.compose.material3.EdgeButtonSize
 import androidx.wear.compose.material3.FilledTonalButton
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.ListHeader
-import androidx.wear.compose.material3.ListSubHeader
-import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
-import androidx.wear.compose.material3.Slider
 import androidx.wear.compose.material3.SurfaceTransformation
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
 import com.lis.wear.R
-import com.lis.wear.model.PlayerState
 
 /**
- * 设置：语速 / 音调用 Material 3 Slider（自带 +/- 端点，符合 Wear 规范），
- * 存储状态用带图标的状态卡展示，Shizuku 授权后立即刷新。
+ * 设置：只保留文件访问相关。语速/音调/章节/定时已移入播放页的上滑面板，
+ * 避免功能重复。
  */
 @Composable
 fun SettingsScreen(
-    state: PlayerState,
-    storageReady: Boolean,
+    shizukuReady: Boolean,
     shizukuRunning: Boolean,
-    onSpeed: (Float) -> Unit,
-    onPitch: (Float) -> Unit,
-    onOpenPicker: () -> Unit,
     onGrantShizuku: () -> Unit,
+    onOpenPicker: () -> Unit,
     onBack: () -> Unit,
 ) {
     val listState = rememberTransformingLazyColumnState()
@@ -64,64 +57,12 @@ fun SettingsScreen(
             }
 
             item {
-                ListSubHeader(
-                    modifier = Modifier.transformedHeight(this, spec),
-                    transformation = SurfaceTransformation(spec),
-                ) { Text("朗读") }
-            }
-
-            item {
-                Slider(
-                    value = state.speed,
-                    onValueChange = onSpeed,
-                    valueRange = 0.5f..2.5f,
-                    steps = 7,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .transformedHeight(this, spec),
-                )
-            }
-            item {
-                Text(
-                    "语速 ${"%.1f".format(state.speed)}×",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            item {
-                Slider(
-                    value = state.pitch,
-                    onValueChange = onPitch,
-                    valueRange = 0.6f..1.6f,
-                    steps = 9,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .transformedHeight(this, spec),
-                )
-            }
-            item {
-                Text(
-                    "音调 ${"%.1f".format(state.pitch)}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            item {
-                ListSubHeader(
-                    modifier = Modifier.transformedHeight(this, spec),
-                    transformation = SurfaceTransformation(spec),
-                ) { Text("文件访问") }
-            }
-
-            item {
                 FilledTonalButton(
                     onClick = onGrantShizuku,
                     icon = {
                         Icon(
                             painter = painterResource(
-                                if (storageReady) R.drawable.ic_check else R.drawable.ic_lock
+                                if (shizukuReady) R.drawable.ic_check else R.drawable.ic_lock
                             ),
                             contentDescription = null,
                             modifier = Modifier.size(20.dp),
@@ -130,7 +71,7 @@ fun SettingsScreen(
                     label = {
                         Text(
                             when {
-                                storageReady -> "Shizuku 已就绪"
+                                shizukuReady -> "Shizuku 已就绪"
                                 shizukuRunning -> "点此授权 Shizuku"
                                 else -> "未检测到 Shizuku"
                             },
@@ -139,7 +80,7 @@ fun SettingsScreen(
                     },
                     secondaryLabel = {
                         Text(
-                            if (storageReady) "可直接扫描手表文件" else "先在手表启动 Shizuku",
+                            if (shizukuReady) "可直接扫描手表文件" else "先在手表启动 Shizuku",
                             maxLines = 1,
                         )
                     },
@@ -165,6 +106,16 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .transformedHeight(this, spec),
                     transformation = SurfaceTransformation(spec),
+                )
+            }
+
+            item {
+                Text(
+                    "语速、音调、章节、定时在播放页向上滑设置",
+                    style = androidx.wear.compose.material3.MaterialTheme.typography.labelSmall,
+                    color = androidx.wear.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                 )
             }
         }

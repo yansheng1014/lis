@@ -1,6 +1,7 @@
 package com.lis.wear.playback
 
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.os.Looper
 import androidx.media3.common.util.UnstableApi
@@ -13,13 +14,20 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
- * Foreground media service. Media3 publishes the MediaStyle notification for us,
- * which is exactly what Wear OS needs to show the playback indicator on the watch
- * face and to let the system media controls (and Samsung's Now bar) drive us.
+ * Foreground media service.
+ *
+ * Media3 posts the MediaStyle notification, and [LisNotificationProvider] attaches
+ * a Wear OngoingActivity to it — together these drive the watch's system media
+ * controls, the watch-face playback indicator and Samsung's Now bar.
+ *
+ * The engine itself lives in [EngineHolder] so the UI and this service share one
+ * instance; the service only owns the session.
  */
 @UnstableApi
 class LisPlaybackService : MediaSessionService() {
@@ -37,28 +45,32 @@ class LisPlaybackService : MediaSessionService() {
         val sessionPlayer = TtsSessionPlayer(engine, Looper.getMainLooper())
         player = sessionPlayer
 
-        // Any state change in the TTS engine must be pushed to the session so
-        // the system UI stays in sync (title, play/pause, chapter).
-        engine.onStateChanged = { sessionPlayer.invalidateStatePublic() }
+        setMediaNotificationProvider(LisNotificationProvider(this, engine))
 
         session = MediaSession.Builder(this, sessionPlayer)
             .setId("lis")
             .setSessionActivity(openAppIntent())
             .build()
 
+        // Push engine changes into the session so system UI stays in sync.
+        engine.onStateChanged = { sessionPlayer.requestStateRefresh() }
+
+        scope.launch { engine.ensureTts() }
+
+        // Refresh the tile when the chapter/sentence/playing state actually changes.
         scope.launch {
-            engine.ensureTts()
-        }
-        scope.launch {
-            // Keep the tile fresh while playback moves along.
-            engine.state.collectLatest { LisTileService.requestUpdate(this@LisPlaybackService) }
+            engine.state
+                .distinctUntilChangedBy {
+                    listOf(it.bookId, it.chapterIndex, it.sentenceIndex, it.isPlaying)
+                }
+                .collectLatest { LisTileService.requestUpdate(this@LisPlaybackService) }
         }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // Watch apps get swiped away often; keep playing unless paused.
+        // Watch apps are swiped away constantly; only die when actually idle.
         if (!engine.isPlaying) {
             stopSelf()
         }
@@ -90,23 +102,35 @@ class LisPlaybackService : MediaSessionService() {
 
     companion object {
         private const val REQUEST_OPEN_APP = 1001
+
+        /** Start (or wake) the service so playback survives leaving the app. */
+        fun ensureRunning(context: Context) {
+            runCatching {
+                val intent = Intent(context, LisPlaybackService::class.java)
+                context.startService(intent)
+            }
+        }
     }
 }
 
 /**
- * The engine must be shared between the UI process components and the service,
- * so it lives in a small holder rather than being owned by either.
+ * Process-wide holder for the playback engine, shared by the UI, the tile
+ * receiver and the media service.
  */
 object EngineHolder {
     @Volatile
     private var engine: TtsBookEngine? = null
 
     fun getOrCreate(
-        context: android.content.Context,
+        context: Context,
         repository: LisRepository,
     ): TtsBookEngine = engine ?: synchronized(this) {
         engine ?: TtsBookEngine(context.applicationContext, repository).also { engine = it }
     }
+
+    /** Create on demand so the tile/receiver work even before the UI ran. */
+    fun require(context: Context): TtsBookEngine =
+        getOrCreate(context, LisRepository.get(context))
 
     fun peek(): TtsBookEngine? = engine
 }

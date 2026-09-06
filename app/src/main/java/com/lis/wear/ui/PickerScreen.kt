@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -18,7 +17,6 @@ import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.material3.CircularProgressIndicator
 import androidx.wear.compose.material3.EdgeButton
 import androidx.wear.compose.material3.EdgeButtonSize
-import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
@@ -27,19 +25,17 @@ import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TitleCard
 import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
-import com.lis.wear.R
 import com.lis.wear.fs.ShizukuFiles
 
-/** 文件浏览：Shizuku 扫描出的手表本地书籍，点一下即导入。 */
+/** 文件浏览：扫出来的手表本地书籍，点一下导入。 */
 @Composable
 fun PickerScreen(
     files: List<ShizukuFiles.RemoteFile>,
-    scanning: Boolean,
-    storageReady: Boolean,
+    busy: Boolean,
+    shizukuReady: Boolean,
     onImport: (ShizukuFiles.RemoteFile) -> Unit,
     onRescan: () -> Unit,
     onGrantShizuku: () -> Unit,
-    onBack: () -> Unit,
 ) {
     val listState = rememberTransformingLazyColumnState()
     val spec = rememberTransformationSpec()
@@ -48,10 +44,11 @@ fun PickerScreen(
         scrollState = listState,
         edgeButton = {
             EdgeButton(
-                onClick = if (storageReady) onRescan else onGrantShizuku,
+                onClick = if (shizukuReady) onRescan else onGrantShizuku,
                 buttonSize = EdgeButtonSize.Small,
+                enabled = !busy,
             ) {
-                Text(if (storageReady) "重新扫描" else "授权 Shizuku")
+                Text(if (shizukuReady) "重新扫描" else "授权 Shizuku")
             }
         },
     ) { contentPadding ->
@@ -68,7 +65,7 @@ fun PickerScreen(
             }
 
             when {
-                scanning -> item {
+                busy -> item {
                     Box(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
                         contentAlignment = Alignment.Center,
@@ -77,18 +74,13 @@ fun PickerScreen(
                     }
                 }
 
-                !storageReady -> item {
-                    Text(
-                        "需要 Shizuku 才能读取手表存储\n在手表上启动 Shizuku 后点下方按钮",
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                    )
-                }
-
                 files.isEmpty() -> item {
                     Text(
-                        "没找到 txt / epub\n放到 Download 或 Documents 再试",
+                        text = if (shizukuReady) {
+                            "没找到 txt / epub\n放到 Download 或 Documents 再试"
+                        } else {
+                            "需要 Shizuku 才能读取手表存储\n点下方按钮授权"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
