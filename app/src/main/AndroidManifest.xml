@@ -11,9 +11,8 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <!-- Broad file read for scanning book folders; granted via Shizuku (appops) or adb -->
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
+    <!-- Shizuku 客户端权限；文件读取全部走 Shizuku shell，不需要 MANAGE_EXTERNAL_STORAGE -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <queries>
         <intent>

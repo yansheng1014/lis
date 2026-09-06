@@ -1,68 +1,71 @@
 package com.lis.wear.ui
 
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
-import androidx.wear.compose.foundation.lazy.itemsIndexed
+import androidx.wear.compose.material3.FilledTonalButton
 import androidx.wear.compose.material3.ListHeader
-import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
+import androidx.wear.compose.material3.SurfaceTransformation
 import androidx.wear.compose.material3.Text
-import androidx.wear.compose.material3.TitleCard
+import androidx.wear.compose.material3.lazy.rememberTransformationSpec
+import androidx.wear.compose.material3.lazy.transformedHeight
 import com.lis.wear.model.PlayerState
 
+/** 章节列表：当前章高亮，点击直接跳转。 */
 @Composable
 fun ChaptersScreen(
     state: PlayerState,
-    initialSelection: Int,
     onSelect: (Int) -> Unit,
-    onBack: () -> Unit,
 ) {
     val listState = rememberTransformingLazyColumnState()
-    val titles = remember(state.bookId) {
-        // We only have the current chapter's title and a count; render stable labels.
-        List(state.chapterCount) { index ->
-            if (index == state.chapterIndex && state.chapterTitle.isNotBlank()) {
-                state.chapterTitle
-            } else {
-                "第 ${index + 1} 章"
-            }
+    val spec = rememberTransformationSpec()
+
+    LaunchedEffect(state.chapterIndex) {
+        if (state.chapterCount > 0) {
+            listState.scrollToItem((state.chapterIndex + 1).coerceAtMost(state.chapterCount))
         }
     }
 
-    LaunchedEffect(initialSelection) {
-        if (initialSelection >= 0 && initialSelection < titles.size) {
-            listState.scrollToItem(initialSelection)
-        }
-    }
-
-    ScreenScaffold(scrollState = listState) {
+    ScreenScaffold(scrollState = listState) { contentPadding ->
         TransformingLazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             item {
-                ListHeader { Text("章节", style = MaterialTheme.typography.titleMedium) }
+                ListHeader(
+                    modifier = Modifier.transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec),
+                ) { Text("章节 · ${state.chapterCount}") }
             }
-            itemsIndexed(titles) { index, title ->
+
+            items(state.chapterCount) { index ->
                 val isCurrent = index == state.chapterIndex
-                TitleCard(
+                FilledTonalButton(
                     onClick = { onSelect(index) },
-                    title = {
+                    label = {
                         Text(
-                            text = (if (isCurrent) "▶ " else "") + title,
+                            if (isCurrent && state.chapterTitle.isNotBlank()) state.chapterTitle
+                            else "第 ${index + 1} 章",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     },
-                ) {
-                    Text(if (isCurrent) "当前章节" else "点击跳转")
-                }
+                    secondaryLabel = if (isCurrent) {
+                        { Text("正在朗读", maxLines = 1) }
+                    } else null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .transformedHeight(this, spec),
+                    transformation = SurfaceTransformation(spec),
+                )
             }
         }
     }

@@ -2,31 +2,30 @@ package com.lis.wear.ui
 
 import android.app.Application
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lis.wear.book.BookImporter
 import com.lis.wear.data.LisRepository
-import com.lis.wear.fs.BookScanner
-import com.lis.wear.fs.StoragePermission
-import com.lis.wear.model.Book
+import com.lis.wear.fs.ShizukuFiles
+import com.lis.wear.fs.ShizukuShell
 import com.lis.wear.model.BookMeta
 import com.lis.wear.model.PlayerState
 import com.lis.wear.playback.EngineHolder
 import com.lis.wear.playback.LisPlaybackService
 import com.lis.wear.playback.TtsBookEngine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.io.File
+import kotlinx.coroutines.withContext
+import rikka.shizuku.Shizuku
 
-sealed interface UiEvent {
-    data class Message(val text: String) : UiEvent
-    object ScanDone : UiEvent
-}
+/** 单条轻提示，UI 用 ConfirmationDialog 展示，2 秒自动关。 */
+data class Toast(val text: String, val success: Boolean = true)
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -36,32 +35,129 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val library: StateFlow<List<BookMeta>> = repository.library
     val playerState: StateFlow<PlayerState> = engine.state
 
-    private val _scanResults = MutableStateFlow<List<File>>(emptyList())
-    val scanResults: StateFlow<List<File>> = _scanResults.asStateFlow()
+    private val _files = MutableStateFlow<List<ShizukuFiles.RemoteFile>>(emptyList())
+    val files: StateFlow<List<ShizukuFiles.RemoteFile>> = _files.asStateFlow()
 
     private val _scanning = MutableStateFlow(false)
     val scanning: StateFlow<Boolean> = _scanning.asStateFlow()
 
-    private val _events = MutableStateFlow<UiEvent?>(null)
-    val events: StateFlow<UiEvent?> = _events.asStateFlow()
+    private val _toast = MutableStateFlow<Toast?>(null)
+    val toast: StateFlow<Toast?> = _toast.asStateFlow()
 
-    private val _storageGranted = MutableStateFlow(StoragePermission.canScanStorage(application))
-    val storageGranted: StateFlow<Boolean> = _storageGranted.asStateFlow()
+    private val _storageReady = MutableStateFlow(ShizukuFiles.available())
+    val storageReady: StateFlow<Boolean> = _storageReady.asStateFlow()
+
+    private val _shizukuRunning = MutableStateFlow(ShizukuShell.isRunning())
+    val shizukuRunning: StateFlow<Boolean> = _shizukuRunning.asStateFlow()
+
+    /** Shizuku 授权对话框的回调：授权成功后立刻刷新状态并自动扫描。 */
+    private val permissionListener =
+        Shizuku.OnRequestPermissionResultListener { _, grantResult ->
+            val granted = grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED
+            refreshShizukuState()
+            if (granted) {
+                _toast.value = Toast("授权成功")
+                scanFiles()
+            } else {
+                _toast.value = Toast("已拒绝授权", success = false)
+            }
+        }
+
+    private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
+        refreshShizukuState()
+    }
 
     init {
+        runCatching {
+            Shizuku.addRequestPermissionResultListener(permissionListener)
+            Shizuku.addBinderReceivedListenerSticky(binderReceivedListener)
+        }
         viewModelScope.launch {
             engine.ensureTts()
-            // Auto-restore the last book so the player page has context on relaunch.
             engine.resumeLast(autoPlay = false)
         }
     }
 
-    fun consumeEvent() {
-        _events.value = null
+    override fun onCleared() {
+        runCatching {
+            Shizuku.removeRequestPermissionResultListener(permissionListener)
+            Shizuku.removeBinderReceivedListener(binderReceivedListener)
+        }
+        super.onCleared()
     }
 
-    fun refreshStorageState() {
-        _storageGranted.value = StoragePermission.canScanStorage(getApplication())
+    fun dismissToast() {
+        _toast.value = null
+    }
+
+    fun refreshShizukuState() {
+        _shizukuRunning.value = ShizukuShell.isRunning()
+        _storageReady.value = ShizukuFiles.available()
+    }
+
+    /** 请求 Shizuku 权限；已就绪时直接扫描。 */
+    fun grantShizuku() {
+        refreshShizukuState()
+        if (!_shizukuRunning.value) {
+            _toast.value = Toast("请先在手表上启动 Shizuku", success = false)
+            return
+        }
+        if (_storageReady.value) {
+            scanFiles()
+            return
+        }
+        ShizukuShell.requestPermission()
+    }
+
+    fun scanFiles() {
+        if (_scanning.value) return
+        viewModelScope.launch {
+            refreshShizukuState()
+            if (!_storageReady.value) {
+                grantShizuku()
+                return@launch
+            }
+            _scanning.value = true
+            val found = withContext(Dispatchers.IO) { ShizukuFiles.list() }
+            _scanning.value = false
+            _files.value = found
+            if (found.isEmpty()) _toast.value = Toast("没找到书籍文件", success = false)
+        }
+    }
+
+    fun importRemote(file: ShizukuFiles.RemoteFile) {
+        viewModelScope.launch {
+            _scanning.value = true
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val local = ShizukuFiles.copyIntoApp(getApplication(), file)
+                        ?: error("读取失败")
+                    BookImporter(getApplication()).importFile(local)
+                }
+            }
+            _scanning.value = false
+            result.onSuccess { book ->
+                repository.saveBook(book)
+                _files.value = _files.value.filterNot { it.path == file.path }
+                _toast.value = Toast("已导入 ${book.title}")
+            }.onFailure {
+                _toast.value = Toast(it.message ?: "导入失败", success = false)
+            }
+        }
+    }
+
+    fun importUri(uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { BookImporter(getApplication()).importUri(uri) }
+            }
+            result.onSuccess {
+                repository.saveBook(it)
+                _toast.value = Toast("已导入 ${it.title}")
+            }.onFailure {
+                _toast.value = Toast(it.message ?: "导入失败", success = false)
+            }
+        }
     }
 
     fun openBook(meta: BookMeta, autoPlay: Boolean = true) {
@@ -71,70 +167,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun importUri(uri: android.net.Uri) {
-        viewModelScope.launch {
-            runCatching {
-                val importer = BookImporter(getApplication())
-                val book = importer.importUri(uri)
-                repository.saveBook(book)
-            }.onSuccess {
-                _events.value = UiEvent.Message("已导入「${it.title}」")
-            }.onFailure {
-                _events.value = UiEvent.Message("导入失败：${it.message}")
-            }
-        }
-    }
-
-    fun scanAndImport() {
-        if (_scanning.value) return
-        viewModelScope.launch {
-            _scanning.value = true
-            val result = BookScanner.scan()
-            _scanning.value = false
-            if (result.error != null) {
-                _events.value = UiEvent.Message("扫描失败：${result.error}")
-                return@launch
-            }
-            _scanResults.value = result.files
-            _events.value = UiEvent.ScanDone
-        }
-    }
-
-    fun importFile(file: File) {
-        viewModelScope.launch {
-            runCatching {
-                val book = BookImporter(getApplication()).importFile(file)
-                repository.saveBook(book)
-            }.onSuccess {
-                _events.value = UiEvent.Message("已导入「${it.title}」")
-                _scanResults.value = _scanResults.value.filterNot { it.absolutePath == file.absolutePath }
-            }.onFailure {
-                _events.value = UiEvent.Message("导入失败：${it.message}")
-            }
-        }
-    }
-
     fun deleteBook(id: String) {
         viewModelScope.launch {
-            engine.stop()
+            if (playerState.value.bookId == id) engine.stop()
             repository.deleteBook(id)
+            _toast.value = Toast("已删除")
         }
     }
 
-    fun grantStorageViaShizuku() {
-        viewModelScope.launch {
-            if (!StoragePermission.isShizukuAvailable()) {
-                _events.value = UiEvent.Message("未检测到 Shizuku，请先在手机上启动 Shizuku")
-                return@launch
-            }
-            StoragePermission.requestShizukuPermission()
-            val ok = StoragePermission.grantAllFilesViaShizuku(getApplication())
-            refreshStorageState()
-            _events.value = UiEvent.Message(if (ok) "存储授权成功" else "授权失败，请手动在系统设置里开启“所有文件访问”")
-        }
+    fun toggle() {
+        engine.togglePlayPause()
+        startService()
     }
-
-    fun toggle() = engine.togglePlayPause()
 
     fun nextChapter() = engine.nextChapter()
 
@@ -144,14 +188,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPitch(v: Float) = engine.setPitch(v)
 
-    fun jumpChapter(index: Int) = engine.jumpChapter(index)
+    fun jumpChapter(index: Int) {
+        engine.jumpChapter(index)
+    }
 
     fun seekToSentence(index: Int) = engine.seekToSentence(index)
 
     private fun startService() {
         val app = getApplication<Application>()
         val intent = Intent(app, LisPlaybackService::class.java)
-        if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(intent)
-        else app.startService(intent)
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 26) app.startForegroundService(intent)
+            else app.startService(intent)
+        }
     }
 }

@@ -27,37 +27,39 @@ class MainActivity : ComponentActivity() {
             LisTheme {
                 val playerState by viewModel.playerState.collectAsStateWithLifecycle()
                 val library by viewModel.library.collectAsStateWithLifecycle()
-                val scanResults by viewModel.scanResults.collectAsStateWithLifecycle()
+                val files by viewModel.files.collectAsStateWithLifecycle()
                 val scanning by viewModel.scanning.collectAsStateWithLifecycle()
-                val event by viewModel.events.collectAsStateWithLifecycle()
-                val storageGranted by viewModel.storageGranted.collectAsStateWithLifecycle()
+                val toast by viewModel.toast.collectAsStateWithLifecycle()
+                val storageReady by viewModel.storageReady.collectAsStateWithLifecycle()
+                val shizukuRunning by viewModel.shizukuRunning.collectAsStateWithLifecycle()
 
-                LisApp(
+                LisNavApp(
                     playerState = playerState,
                     library = library,
-                    scanResults = scanResults,
+                    files = files,
                     scanning = scanning,
-                    storageGranted = storageGranted,
-                    event = event,
+                    storageReady = storageReady,
+                    shizukuRunning = shizukuRunning,
+                    toast = toast,
                     startInPlayer = startInPlayer,
-                    onOpenBook = viewModel::openBook,
-                    onImportUri = { openDocumentLauncher.launch(arrayOf("text/*", "application/epub+zip")) },
-                    onScan = viewModel::scanAndImport,
-                    onImportFile = viewModel::importFile,
-                    onDeleteBook = viewModel::deleteBook,
-                    onGrantShizuku = viewModel::grantStorageViaShizuku,
-                    onOpenAllFilesSettings = {
-                        com.lis.wear.fs.StoragePermission.openAllFilesSettings(this)
+                    onOpenBook = { viewModel.openBook(it) },
+                    onImportUri = {
+                        openDocumentLauncher.launch(
+                            arrayOf("text/*", "application/epub+zip", "*/*")
+                        )
                     },
-                    onConsumeEvent = viewModel::consumeEvent,
+                    onImportRemote = viewModel::importRemote,
+                    onScan = viewModel::scanFiles,
+                    onDeleteBook = viewModel::deleteBook,
+                    onGrantShizuku = viewModel::grantShizuku,
+                    onDismissToast = viewModel::dismissToast,
                     onToggle = viewModel::toggle,
-                    onNext = viewModel::nextChapter,
-                    onPrevious = viewModel::previousChapter,
+                    onNext = { viewModel.nextChapter() },
+                    onPrevious = { viewModel.previousChapter() },
                     onSpeed = viewModel::setSpeed,
                     onPitch = viewModel::setPitch,
                     onJumpChapter = viewModel::jumpChapter,
                     onSeekSentence = viewModel::seekToSentence,
-                    onRefreshStorage = viewModel::refreshStorageState,
                 )
             }
         }
@@ -70,7 +72,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        viewModel.refreshStorageState()
+        viewModel.refreshShizukuState()
     }
 
     companion object {
